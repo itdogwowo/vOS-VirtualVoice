@@ -1,0 +1,8 @@
+# 這個資料夾用來放「各平台自行下載」的外部 CLI 二進位檔，例如：
+#
+#   - vgmstream-cli          （Wwise .wem / CriWare .acb / FMOD .fsb 解包）
+#   - vgmstream-win64.zip    -> vgmstream-cli.exe
+#   - ffmpeg / ffprobe       （通用解碼，若系統 PATH 已有則不需放這裡）
+#
+# 下載來源見 docs/PHASE1-INGEST.md 的「工具鏈安裝」章節。
+# 二進位檔本身已被 .gitignore 排除（tools/bin/**），只保留本說明檔。

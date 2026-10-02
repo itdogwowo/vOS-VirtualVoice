@@ -1,0 +1,88 @@
+{
+  "$comment": [
+    "vOS-VirtualVoice 語音生產線 — 主設定檔（Phase 1 相關欄位已啟用）",
+    "所有路徑皆為「相對於本 repo 根目錄」的相對路徑，嚴禁寫入本機絕對路徑。",
+    "複製本檔為 configs/pipeline.local.json 再改，不要直接改這一份。"
+  ],
+
+  "target": {
+    "$comment": "Phase 1 產出格式：24bit / 48kHz / 單聲道 / PCM WAV（GPT-SoVITS 訓練標準）",
+    "sample_rate": 48000,
+    "bit_depth": 24,
+    "channels": 1
+  },
+
+  "duration_filter": {
+    "$comment": "任務2：剔除純喘氣/單字哼聲（過短）與過長檔案。單位：秒。",
+    "min_seconds": 1.5,
+    "max_seconds": 15.0
+  },
+
+  "quality_gate": {
+    "$comment": [
+      "任務2 附加：早期偵測『壞資料』，避免把垃圾餵進 Phase 2/4。",
+      "peak_dbfs 必須 <= 該值（0.0 = 不可削波，-1.0 較嚴格）。",
+      "min_rms_dbfs 過濾近乎無聲的檔案。",
+      "允許 --no-quality-gate 關閉（只做時長篩選）。"
+    ],
+    "enabled": true,
+    "peak_dbfs_max": -0.5,
+    "min_rms_dbfs": -50.0
+  },
+
+  "grouping": {
+    "$comment": [
+      "by = \"none\"   ：單一角色。所有產物攤平在 02_wav24_48k/ 同一層。",
+      "by = \"folder\"：多角色／多來源。素材放成 data/00_raw/<角色名>/xxx.wem，",
+      "                產物會各自進到 02_wav24_48k/<角色名>/，manifest 也會有 group 欄位。",
+      "強烈建議多角色專案用 folder，否則 Phase 4 打標籤與 Phase 5 選參考音訊時會混到別的角色。"
+    ],
+    "by": "none"
+  },
+
+  "paths": {
+    "raw_dir": "data/00_raw",
+    "unpacked_dir": "data/01_unpacked",
+    "standardized_dir": "data/02_wav24_48k",
+    "rejected_dir": "data/99_rejected",
+    "reports_dir": "data/_reports"
+  },
+
+  "manifest": {
+    "$comment": "每個檔案一列，可追溯來源 → 產物，供 Phase 4 標註時回查。",
+    "filename": "manifest_phase1.csv",
+    "include_rejected": true
+  },
+
+  "unpack": {
+    "$comment": [
+      "vgmstream-cli 解包設定。Wwise .wem 若已是 Ogg Vorbis，會由轉碼階段直接處理，不需解包。",
+      "vgmstream_bin: \"auto\" = 自動尋找（tools/bin/ 優先，其次系統 PATH）",
+      "max_subsongs: 單一容器允許解出的 subsong 上限。",
+      "  防呆用 —— 一個 .awb 可能內含數千條語音，意外全解會佔滿磁碟。",
+      "  超過上限的容器會被『跳過』並提示，不會靜默展開。",
+      "extra_args: 進階用，直接附加給 vgmstream-cli（例如 [\"-l\", \"1.0\"] 只取一圈循環）"
+    ],
+    "vgmstream_bin": "auto",
+    "keep_subdirs": true,
+    "max_subsongs": 3000,
+    "extra_args": []
+  },
+
+  "scan": {
+    "$comment": "要掃描的副檔名（不分大小寫）。同時包含『容器』與『已是音訊』兩類。",
+    "extensions": [
+      ".wem", ".acb", ".awb", ".cpk", ".fsb", ".bank", ".bnk",
+      ".ogg", ".wav", ".flac", ".mp3", ".m4a", ".aac", ".opus", ".adx", ".hca"
+    ]
+  },
+
+  "decode": {
+    "$comment": [
+      "音訊解碼後端優先序。soundfile = libsndfile（快、純 Python 依賴）。",
+      "ffmpeg = 萬能後備（找不到 ffmpeg 時，遇到不支援格式會明確報錯，不會靜默跳過）。",
+      "vgmstream = 針對遊戲容器（.wem/.acb/.fsb）。"
+    ],
+    "backend_priority": ["soundfile", "ffmpeg", "vgmstream"]
+  }
+}

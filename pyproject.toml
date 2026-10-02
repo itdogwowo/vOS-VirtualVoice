@@ -1,0 +1,30 @@
+[project]
+name = "vos-virtualvoice"
+version = "0.1.0"
+description = "vOS-VirtualVoice — 跨平台遊戲語音 → GPT-SoVITS 長篇有聲書生產線"
+requires-python = ">=3.10"
+dependencies = [
+  "soundfile>=0.12.1",
+  "numpy>=1.26",
+  "soxr>=0.3.7",
+  "scipy>=1.11",
+  "tqdm>=4.66",
+  "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# cache_dir 指向專案內：部分環境無法在系統 Temp 建立 pytest 的暫存檔（WinError 5）。
+# 注意 basetemp 只能由命令列給（見 tests/conftest.py 的說明）。
+cache_dir = ".pytest_tmp/.cache"
+filterwarnings = [
+  "ignore::pytest.PytestCacheWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

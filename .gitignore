@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# vOS-VirtualVoice  .gitignore
+# 原則：程式碼、設定、文件進版控；任何「大體積資料 / 環境 / 機密」一律不進。
+# ---------------------------------------------------------------------------
+
+# --- 音訊資料（絕對不進版控）---
+data/
+!data/**/.gitkeep
+*.wav
+*.flac
+*.ogg
+*.wem
+*.acb
+*.awb
+*.cpk
+*.fsb
+*.bank
+*.bnk
+*.mp3
+*.m4a
+*.aac
+*.opus
+*.wav.bak
+
+# --- Python 環境 ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- 工具鏈自帶的二進位檔（各平台自行下載，不進版控）---
+tools/bin/**
+!tools/bin/.gitkeep
+
+# --- vgmstream 輸出 / 中間產物 ---
+*.log
+*.tmp
+_out/
+.audio_probe/
+.manifest_cache/
+
+# --- 模型權重（Phase 2/3/4 會用到，動輒數 GB）---
+models/
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pt
+
+# --- 前處理快取 ---
+.cache/
+.pytest_tmp/
+.pytest_cache/
+# pytest 在系統 Temp 建立的殘留資料夾（某些受限環境會留下且無法刪除）
+pytest-cache-files-*/
+
+# --- 機密 / 個資（見 privacy-guard 規範）---
+.privacy-denylist.txt
+.env
+.env.*
+*.secret
+secrets.*
+
+# --- OS / 編輯器 ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+*.swp
