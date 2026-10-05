@@ -39,8 +39,22 @@ PYTHON_EXE="$(resolve_python)"
 PREP_SCRIPT="${REPO_ROOT}/scripts/phase1_prep.py"
 
 if [[ $# -eq 0 ]]; then
-    echo "用法：bash scripts/run_phase1.sh <doctor|scan|unpack|convert|all> [選項]" >&2
-    echo "例：  bash scripts/run_phase1.sh convert --limit 50 -v" >&2
+    cat >&2 <<'USAGE'
+用法：bash scripts/run_phase1.sh <指令> [選項]
+
+指令：
+  doctor     檢查 Python 依賴 / 外部工具 / 資料夾 / 目標格式
+  scan       嗅探素材真實格式分布（不寫檔，最重要的一步）
+  unpack     用 vgmstream-cli 解包遊戲容器
+  convert    標準化為 24bit/48kHz WAV + 時長篩選
+  audition   產生試聽帶與對照清單（人工驗收用）
+  tune       分析 manifest，建議該不該調整門檻
+  report     產生綜合報告（驗收清單 + 下一步）
+  all        依序執行 scan -> unpack -> convert
+
+例：  bash scripts/run_phase1.sh scan
+      bash scripts/run_phase1.sh convert --limit 50 -v
+USAGE
     exit 64
 fi
 

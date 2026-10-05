@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# vOS-VirtualVoice  .gitattributes
+#
+# 這份檔案的用途：讓「檔案進入 repo 時長什麼樣子」不取決於開發者的機器。
+#
+# 沒有它的話，行尾完全由每個人的 core.autocrlf 決定：
+#   * autocrlf=true （Windows 預設）→ 簽出時轉 CRLF
+#   * autocrlf=false（Linux/macOS）→ 保持原樣
+# 於是同一份 repo 在不同機器上會產生大量「看起來改了什麼、其實只差行尾」
+# 的假 diff，而且 shell script 可能因此壞掉。
+#
+# 原則：**repo 裡一律存 LF**，由這裡明確聲明。
+# ---------------------------------------------------------------------------
+
+# 預設：交給 git 自動判斷文字檔並正規化為 LF
+* text=auto eol=lf
+
+# --- Shell script：必須是 LF ---
+# CRLF 的 shell script 在 Linux/macOS 上會直接失敗：
+#   bash: ./scripts/run_phase1.sh: /bin/bash^M: bad interpreter
+# tests/test_scripts.py 會擋下這個問題。
+*.sh    text eol=lf
+
+# --- PowerShell：ASCII-only 的檔案，用 CRLF 最保險 ---
+# 注意：真正的跨平台保障是「run_phase1.ps1 不含任何非 ASCII 字元」。
+# Windows PowerShell 5.1 會用系統 ANSI 讀取沒有 BOM 的 .ps1，
+# 一個中文字就能讓引號配對錯亂、整個腳本 ParserError。
+# 詳見該檔開頭的說明。
+*.ps1   text eol=crlf
+
+# --- 資料與設定：一律 LF ---
+*.json  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.py    text eol=lf
+*.txt   text eol=lf
+
+# --- 音訊素材：絕不正規化 ---
+# git 的換行轉換會直接損壞二進位檔。這裡明確標記為 binary，
+# 同時避免 git 嘗試做 diff 或自動合併。
+*.wav   binary
+*.flac  binary
+*.ogg  binary
+*.wem   binary
+*.awb   binary
+*.acb   binary
+*.cpk   binary
+*.fsb   binary
+*.bnk   binary
+*.mp3   binary
+*.m4a   binary
+*.hca   binary
+*.adx   binary
+
+# --- 模型權重與其他二進位 ---
+*.pth         binary
+*.ckpt        binary
+*.safetensors binary
+*.onnx        binary
+*.dll         binary
+*.exe         binary
+
+# --- 讓 GitHub 的語言統計認得這些檔案 ---
+*.py    linguist-language=Python
+*.ps1   linguist-language=PowerShell
+*.sh    linguist-language=Shell
+
+# --- 標註為文件，避免進語言統計 ---
+docs/*.md  linguist-documentation
+README.md  linguist-documentation
