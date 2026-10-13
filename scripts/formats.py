@@ -108,10 +108,35 @@ FORMAT_TABLE: dict[str, dict[str, object]] = {
         "needs_unpack": True,
         "decoder": "vgmstream",
     },
+    "wwise_bnk": {
+        "label": "Wwise SoundBank (.bnk, BKHD)",
+        "family": "wwise_pkg",
+        "needs_unpack": True,
+        "decoder": "vgmstream",
+    },
     "wwise_akpk": {
         "label": "Wwise .akpk / 新版 SoundBank",
         "family": "wwise_pkg",
         "needs_unpack": True,
+        "decoder": "vgmstream",
+    },
+    "cri_caf": {
+        "label": "CriWare CAF",
+        "family": "criware",
+        "needs_unpack": False,
+        "decoder": "vgmstream",
+    },
+    "mpc": {"label": "Musepack", "family": "plain_audio", "needs_unpack": False, "decoder": "ffmpeg"},
+    "ape": {"label": "Monkey's Audio", "family": "plain_audio", "needs_unpack": False, "decoder": "ffmpeg"},
+    "wavpack": {"label": "WavPack", "family": "plain_audio", "needs_unpack": False, "decoder": "ffmpeg"},
+    "caf_apple": {"label": "Apple CAF", "family": "plain_audio", "needs_unpack": False, "decoder": "ffmpeg"},
+    "speex": {"label": "Speex", "family": "plain_audio", "needs_unpack": False, "decoder": "ffmpeg"},
+    # 由 vgmstream 判定、但我們自己的 magic 表認不出的格式
+    # （見 unpack.probe_with_vgmstream 與 phase1_prep.sniff_with_fallback）
+    "vgmstream_generic": {
+        "label": "vgmstream 可解碼（格式未辨識）",
+        "family": "plain_audio",
+        "needs_unpack": False,
         "decoder": "vgmstream",
     },
     "mp3": {"label": "MP3", "family": "plain_audio", "needs_unpack": False, "decoder": "soundfile"},
@@ -264,6 +289,11 @@ def sniff_format(path: str | Path) -> FormatInfo:
             if head[0:4] == b"AKPK":
                 return _make("wwise_akpk")
 
+            # Wwise SoundBank：BKHD 是 bank header 區塊 id。
+            # .bnk 可能直接以 BKHD 開頭，也可能是 RIFF 包裝（後者已由 _probe_riff 處理）。
+            if head[0:4] == b"BKHD" or head[4:8] == b"BKHD":
+                return _make("wwise_bnk", "Wwise SoundBank (BKHD 區塊)")
+
             if head[0:4] == b"@UTF":
                 return _make("cri_acb", "ACB 中的 UTF 表（cue sheet）")
 
@@ -274,12 +304,45 @@ def sniff_format(path: str | Path) -> FormatInfo:
             if head[0:3] == b"AWB":
                 return _make("cri_awb")
 
+            # CriWare CPK 封裝：magic 為 "CPK "（含尾隨空白）
+            if head[0:4] == b"CPK ":
+                return _make("cri_cpk", "CPK 封裝")
+
+            # CriWare CSF（CPK 內部的檔案系統描述區塊）
+            if head[0:3] == b"CSF":
+                return _make("cri_cpk", "CSF 區塊（CPK 內部）")
+
+            # CriWare CAF（音訊檔案；Apple 的 CAF 簽章是 "caff"，不同）
+            if head[0:4] == b"CAF ":
+                return _make("cri_caf", "CriWare CAF")
+
             # Wwise PCK：以 "AKPK" 開頭者已處理；舊版 PCK 開頭為 'PCK' 或含 BKHD 區塊
             if head[0:4] == b"PCK\x00" or head[0:3] == b"PCK":
                 return _make("wwise_pck", "Wwise PCK 舊版標頭")
 
+            # RF64 / RIFX / BW64：超過 4 GiB 或 big-endian 的 RIFF 家族
+            if head[0:4] in (b"RF64", b"RIFX", b"BW64"):
+                return _make(
+                    "wav_riff",
+                    f"{head[0:4].decode('latin-1')} 變體，由 soundfile/ffmpeg 處理",
+                )
+
+            # 少見但偶爾出現在遊戲 OST
+            if head[0:4] == b"MPCK" or head[0:3] == b"MP+":
+                return _make("mpc", "Musepack")
+            if head[0:4] == b"MAC ":
+                return _make("ape", "Monkey's Audio")
+            if head[0:4] == b"wvpk":
+                return _make("wavpack", "WavPack")
+            if head[0:4] == b"caff":
+                return _make("caf_apple", "Apple CAF")
+
             if head[0:3] == b"ID3" or (head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
                 return _make("mp3")
+
+            # Speex 通常在 Ogg 內，但有些遊戲直接存裸 Speex 串流
+            if head[0:8] == b"Speex   ":
+                return _make("speex", "裸 Speex 串流")
 
             if head[4:8] == b"ftyp":
                 return _make("m4a_mp4", f"brand={head[8:12].decode('latin-1', 'replace')}")
@@ -287,10 +350,13 @@ def sniff_format(path: str | Path) -> FormatInfo:
             if head[0:4] == b"FORM":
                 return _make("aiff")
 
-            # 以 'CRI' 開頭但非上述者，多半是 CPK
+            # 以 'CRI' 開頭但非上述者，多半是 CPK 或自製封裝
             if head[0:3] == b"CRI":
                 return _make("cri_cpk", f"magic={head[0:4]!r}")
 
+            # 完全認不出來。這是「未知格式」最常見的來源，而解法不是繼續猜 magic，
+            # 而是去問 vgmstream —— 它認得幾百種格式（見 unpack.probe_with_vgmstream
+            # 與 phase1_prep.sniff_with_fallback）。
             return _make("unknown", f"magic={head[0:4]!r}")
     except OSError as exc:
         return _make("unknown", f"無法讀取: {exc}")

@@ -106,7 +106,8 @@ class UnpackResult:
 # ---------------------------------------------------------------------------
 def build_probe_cmd(exe: str, src: Path, extra_args: tuple[str, ...] = ()) -> list[str]:
     """
-    `-m`：只印資訊不解碼。用來在真正解包前得知 subsong 數量。
+    `-m`：只印資訊不解碼。用來在真正解包前得知 subsong 數量，
+    也是「未知格式」時詢問 vgmstream 認不認得這個檔的管道。
     """
     return [exe, "-m", *extra_args, str(src)]
 
@@ -429,16 +430,116 @@ class UnpackSummary:
     results: deque[UnpackResult] = field(default_factory=deque)
 
 
+# ---------------------------------------------------------------------------
+# 格式判定後備：問 vgmstream
+# ---------------------------------------------------------------------------
+@dataclass
+class VgmProbe:
+    """vgmstream 對某個檔案的判定結果。"""
+
+    readable: bool = False          # vgmstream 能不能解這個檔
+    subsongs: int = -1              # 探測到的 subsong 數；-1 = 無法判定
+    encoding: str = ""              # 例如 Vorbis / Opus / ADPCM / PCM16LE
+    channels: int = 0
+    sample_rate: int = 0
+    detail: str = ""                # 原始輸出摘要（失敗時附原因）
+
+    @property
+    def summary(self) -> str:
+        """一行式摘要，適合放進 manifest / 掃描報告。"""
+        if not self.readable:
+            return self.detail or "vgmstream 無法解析"
+        bits = [self.encoding or "unknown codec"]
+        if self.channels:
+            bits.append(f"{self.channels}ch")
+        if self.sample_rate:
+            bits.append(f"{self.sample_rate}Hz")
+        if self.subsongs > 1:
+            bits.append(f"{self.subsongs} subsongs")
+        return " / ".join(bits)
+
+
+_ENC_RE = re.compile(r"encoding\s*[:=]\s*(.+)", re.IGNORECASE)
+_CHAN_RE = re.compile(r"channels?\s*[:=]\s*(\d+)", re.IGNORECASE)
+#: 取樣率的鍵名在不同版本／輸出裡可能是 "sample rate" 或 "sample_rate"，
+#: 所以中間的字元類別要同時吃空白與底線。
+_RATE_RE = re.compile(r"sample[\s_]*rate\s*[:=]\s*(\d+)", re.IGNORECASE)
+
+
+def parse_probe_output(text: str) -> VgmProbe:
+    """
+    解析 vgmstream `-m` 的輸出。
+
+    為什麼要有這個：**vgmstream 認識幾百種格式，我們自己的 magic 表只認得
+    二十幾種。** 當 sniff_format 回報「未知格式」時，問 vgmstream 是解決
+    「一堆檔案認不出來」最有效的辦法 —— 比繼續手寫 magic 判斷可靠得多。
+
+    `-m` 對無法解析的檔案會非零退出並印出原因，這裡據此判斷 readable。
+    """
+    probe = VgmProbe()
+    if not text.strip():
+        probe.detail = "vgmstream 沒有任何輸出"
+        return probe
+
+    lowered = text.lower()
+    # 常見的失敗字樣（vgmstream 的錯誤訊息格式不固定，所以用關鍵字比對）
+    if "failed to open" in lowered or "unsupported" in lowered:
+        first = text.strip().splitlines()[0] if text.strip() else ""
+        probe.detail = first
+        return probe
+
+    match = _ENC_RE.search(text)
+    if match:
+        # 單行格式（`encoding=Vorbis, channels=1`）會讓貪婪的 .+ 吃掉整行，
+        # 所以在逗號／分號處截斷，否則摘要會變成一長串雜訊。
+        encoding = re.split(r"[,;]", match.group(1).strip().splitlines()[0])[0].strip()
+        probe.encoding = encoding[:40]
+    match = _CHAN_RE.search(text)
+    if match:
+        probe.channels = int(match.group(1))
+    match = _RATE_RE.search(text)
+    if match:
+        probe.sample_rate = int(match.group(1))
+    probe.subsongs = parse_subsong_count(text)
+
+    # 認得出 encoding/channels/sample rate 任一項，就當它讀得動
+    probe.readable = bool(probe.encoding or probe.channels or probe.sample_rate)
+    if not probe.readable:
+        probe.detail = text.strip().splitlines()[0][:80] if text.strip() else "無可辨識的資訊"
+    return probe
+
+
+def probe_with_vgmstream(src: Path, exe: str, *, timeout: int = 120) -> VgmProbe:
+    """
+    用 vgmstream 判定一個檔案（不依賴我們自己的 magic 表）。
+
+    失敗永不拋例外 —— 認不出來只是「未知」，不該讓整個掃描中斷。
+    """
+    if not _tool_exists(exe):
+        return VgmProbe(detail="未安裝 vgmstream-cli")
+    try:
+        proc = run_tool(build_probe_cmd(exe, Path(src)), check=False, timeout=timeout)
+    except RuntimeError as exc:
+        return VgmProbe(detail=str(exc))
+    probe = parse_probe_output(f"{proc.stdout}\n{proc.stderr}")
+    if not probe.readable and not probe.detail:
+        probe.detail = f"vgmstream 無法解析（exit {proc.returncode}）"
+    return probe
+
+
 __all__ = [
     "COMPANION_HINTS",
     "TOOL_NAME",
     "UnpackOptions",
     "UnpackResult",
     "UnpackSummary",
+    "VgmProbe",
     "build_probe_cmd",
     "build_unpack_cmd",
     "companion_hint",
     "estimate_total_subsongs",
+    "parse_probe_output",
     "parse_subsong_count",
+    "probe_with_vgmstream",
     "unpack_one",
 ]
