@@ -105,6 +105,8 @@ from unpack import (  # noqa: E402
 from audition import build_reel, filesystem_safe, list_candidates, plan_samples  # noqa: E402
 from tune import analyze, read_manifest, render_report, report_as_dict  # noqa: E402
 from report import collect, render, render_json  # noqa: E402
+from selftest import run_selftest  # noqa: E402
+from space import estimate_from_source_bytes  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Manifest schema（欄位順序固定，方便 Phase 4 用 pandas 讀）
@@ -514,6 +516,33 @@ def cmd_unpack(cfg: PipelineConfig, args: argparse.Namespace) -> int:
                 print("   建議先用 --limit 5 小量驗證。")
     print("=" * 72)
 
+    # 磁碟空間預檢。
+    #
+    # 為什麼一定要做：解包會把壓縮音訊變成 PCM，資料量放大 8~18 倍。
+    # 寫爆磁碟的後果不是「失敗」而是「部分成功」—— 容器只解出一部分 subsong，
+    # 卻沒有明顯錯誤訊息，Phase 2 會把截斷的素材當成正常資料餵進模型。
+    src_bytes = 0
+    for p in sources:
+        try:
+            src_bytes += p.stat().st_size
+        except OSError:
+            pass
+    est = estimate_from_source_bytes(
+        src_bytes, cfg.paths.unpacked_dir, label="解包產物（01_unpacked）"
+    )
+    print()
+    print(est.render())
+    if not est.sufficient and not args.force:
+        print(
+            f"\n {BAD} 空間不足，已中止（避免寫出殘缺的產物）。\n"
+            f"    三個選項：\n"
+            f"      1. 清出空間後重跑\n"
+            f"      2. 先用 --limit 5 小量驗證流程\n"
+            f"      3. 確定要硬跑：加 --force"
+        )
+        return 1
+    if not est.sufficient:
+        print(f"\n {WARN} 空間不足但你指定了 --force，繼續執行。")
     ok = fail = skipped = already = 0
     produced: list[Path] = []
 
@@ -806,6 +835,41 @@ def cmd_convert(cfg: PipelineConfig, args: argparse.Namespace) -> int:
           f"{'  ｜ 平行 ' + str(args.workers) if args.workers > 1 else ''}")
     print("=" * 72)
 
+    # 磁碟空間預檢（convert 有兩份輸出，兩個都要算）：
+    #   1. 合格區：24-bit/48kHz 單聲道，144 KB/s（可精確預估）
+    #   2. 淘汰區：來源檔的**完整複本**（我們刻意用複製而非搬移，
+    #      讓原始素材永遠留著）—— 漏算這項是很容易犯的錯，
+    #      因為被淘汰的檔案往往佔多數。
+    if not args.dry_run:
+        src_bytes = 0
+        for p in targets:
+            try:
+                src_bytes += p.stat().st_size
+            except OSError:
+                pass
+        est_out = estimate_from_source_bytes(
+            src_bytes, cfg.paths.standardized_dir, label="標準化產物（02_wav24_48k）"
+        )
+        est_rej = estimate_from_source_bytes(
+            src_bytes,
+            cfg.paths.rejected_dir,
+            label="淘汰區複本（99_rejected）",
+            already_pcm=True,
+        )
+        combined_free = min(est_out.free_bytes, est_rej.free_bytes)
+        needed = est_out.needed_bytes + est_rej.needed_bytes
+        print()
+        print(est_out.render())
+        print(f" 淘汰區另需約 {est_out.human(est_rej.high_bytes) if hasattr(est_out,'human') else est_rej.low_bytes}（來源檔的完整複本）")
+        if combined_free < needed and not args.force:
+            print(
+                f"\n {BAD} 空間不足（合計需約 {needed / 1024**3:.1f} GiB，"
+                f"可用 {combined_free / 1024**3:.1f} GiB），已中止。\n"
+                f"    選項：1) 清出空間  2) 先跑 --limit 50  3) 加 --force 硬跑"
+            )
+            return 1
+        if combined_free < needed:
+            print(f"\n {WARN} 空間不足但你指定了 --force，繼續執行。")
     if not args.dry_run:
         cfg.paths.ensure()
 
@@ -1189,6 +1253,54 @@ def cmd_report(cfg: PipelineConfig, args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 子命令：selftest（用合成素材驗證工具鏈本身能不能動）
+# ---------------------------------------------------------------------------
+def cmd_selftest(cfg: PipelineConfig, args: argparse.Namespace) -> int:
+    """
+    用合成音訊跑一次真正的流程，回答「這套工具在我的機器上能不能動」。
+
+    不需要任何素材、不需要外部工具、也不會碰你真正的 data/ ——
+    它在暫存區建立臨時 repo，跑完就刪。
+    """
+    print("=" * 72)
+    print(" Phase 1 自我測試（合成素材，不需要你的素材）")
+    print("=" * 72)
+    print(" 流程：產生合成素材 -> convert -> 驗證規格與篩選 -> audition/tune/report")
+    print(" 隔離：臨時工作區，跑完刪除；不會碰 data/")
+    print("=" * 72)
+
+    report = run_selftest(keep_workspace=args.keep_workspace)
+
+    print("\n" + "=" * 72)
+    print(" 檢查結果")
+    print("=" * 72)
+    for check in report.checks:
+        mark = OK if check.passed else BAD
+        detail = f"  -- {check.detail}" if check.detail else ""
+        print(f"  {mark} {check.label}{detail}")
+        if not check.passed and check.hint:
+            print(f"      -> {check.hint}")
+
+    if report.notes:
+        print(f"\n {INFO} 提醒（不影響自我測試結果）：")
+        for note in report.notes[:6]:
+            print(f"   - {note}")
+
+    passed = sum(1 for c in report.checks if c.passed)
+    print(f"\n 通過 {passed}/{len(report.checks)} 項")
+
+    if report.passed:
+        print(f"\n {OK} 工具鏈在你的機器上可以正常運作。")
+        print("    下一步：把遊戲語音放進 data/00_raw/，然後跑 scan")
+    else:
+        print(f"\n {BAD} 有 {len(report.failed)} 項失敗 -- 請先修正再處理真實素材。")
+        for check in report.failed:
+            print(f"   - {check.label}：{check.detail}")
+        if args.keep_workspace and report.workspace:
+            print(f"\n   臨時工作區保留在：{report.workspace}")
+    return 0 if report.passed else 1
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -1221,6 +1333,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--no-probe", action="store_true", help="解包前不探測 subsong 數量（較快但無安全上限）"
         )
         p.add_argument("-v", "--verbose", action="store_true", help="逐檔輸出（預設每 25 檔一摘要）")
+
+        p.add_argument(
+            "--force",
+            action="store_true",
+            help="略過磁碟空間預檢（空間不足時仍強制執行）",
+        )
         p.add_argument(
             "--no-fallback",
             action="store_true",
@@ -1235,6 +1353,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("audition", "抽取合格素材樣本 → 產生試聽帶與對照清單（人工驗收用）"),
         ("tune", "分析 manifest，建議該不該調整篩選門檻（淘汰率異常時用）"),
         ("report", "產生 Phase 1 綜合報告（驗收清單 + 下一步指令，交接用）"),
+        ("selftest", "用合成素材驗證工具鏈本身能不能動（不需要你的素材）"),
         ("all", "依序執行 scan → unpack → convert"),
     ):
         sp = sub.add_parser(name, help=help_text)
@@ -1253,6 +1372,12 @@ def build_parser() -> argparse.ArgumentParser:
                 "--no-scan",
                 action="store_true",
                 help="跳過 00_raw 的格式掃描（大目錄時較快）",
+            )
+        if name == "selftest":
+            sp.add_argument(
+                "--keep-workspace",
+                action="store_true",
+                help="保留臨時工作區供事後檢查（預設跑完刪除）",
             )
 
     return parser
@@ -1286,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
         "audition": cmd_audition,
         "tune": cmd_tune,
         "report": cmd_report,
+        "selftest": cmd_selftest,
         "all": lambda c, a: _cmd_all(c, a, parser),
     }
     try:

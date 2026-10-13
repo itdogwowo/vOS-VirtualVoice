@@ -50,6 +50,7 @@ if [[ $# -eq 0 ]]; then
   audition   產生試聽帶與對照清單（人工驗收用）
   tune       分析 manifest，建議該不該調整門檻
   report     產生綜合報告（驗收清單 + 下一步）
+  selftest   用合成素材驗證工具鏈能不能動（不需要你的素材）
   all        依序執行 scan -> unpack -> convert
 
 例：  bash scripts/run_phase1.sh scan

@@ -411,9 +411,11 @@ def run_selftest(*, keep_workspace: bool = False, quiet: bool = False) -> SelfTe
         )
 
         # ---- 7. 外部工具（只提醒，不算失敗）----
-        from diag import diagnose_all
+        statuses = []
+        if _has_diag():
+            from diag import diagnose_all
 
-        statuses = diagnose_all(None, probe=False) if _has_diag() else []
+            statuses = diagnose_all(None, probe=False)
         for status in statuses:
             if not status.available:
                 report.notes.append(
