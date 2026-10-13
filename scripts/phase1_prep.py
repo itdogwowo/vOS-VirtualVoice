@@ -107,6 +107,7 @@ from tune import analyze, read_manifest, render_report, report_as_dict  # noqa: 
 from report import collect, render, render_json  # noqa: E402
 from selftest import run_selftest  # noqa: E402
 from space import estimate_from_source_bytes  # noqa: E402
+from diag import diagnose_all  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Manifest schema（欄位順序固定，方便 Phase 4 用 pandas 讀）
@@ -276,13 +277,22 @@ def cmd_doctor(cfg: PipelineConfig, args: argparse.Namespace) -> int:
         critical_missing.append("soxr 或 scipy（重採樣必需）")
 
     print("\n[外部工具]")
-    for tool, why in (
-        ("ffmpeg", "通用解碼後備（m4a/aac/wma）"),
-        ("ffprobe", "讀取取樣率"),
-        ("vgmstream-cli", "Wwise/CriWare/FMOD 遊戲容器解包"),
-    ):
-        found = find_external_bin(tool)
-        print(f"  {OK if found else BAD} {tool:<16} {found or '（未找到）':<44} {why}")
+    # 用 diag 模組而不是直接 find_external_bin：
+    #   1. 它會考慮設定檔的 unpack.vgmstream_bin（否則使用者設好了卻看到紅字）
+    #   2. 它會檢查 Windows 上最容易誤判的缺 DLL 情況
+    #   3. 它會實際跑一次，抓出「檔案在卻跑不起來」
+    for status in diagnose_all(cfg, probe=not args.no_probe):
+        if status.healthy:
+            mark, shown = OK, status.path
+        elif status.available:
+            mark, shown = WARN, status.path
+        else:
+            mark, shown = BAD, "（未找到）"
+        origin = f"  <- {status.source}" if status.available else ""
+        version = f"  {status.version}" if status.version else ""
+        print(f"  {mark} {status.name:<16} {str(shown):<46}{version}{origin}")
+        for note in status.notes:
+            print(f"      {WARN} {note}")
 
     print("\n[資料夾]")
     for label, p in (
@@ -521,28 +531,31 @@ def cmd_unpack(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     # 為什麼一定要做：解包會把壓縮音訊變成 PCM，資料量放大 8~18 倍。
     # 寫爆磁碟的後果不是「失敗」而是「部分成功」—— 容器只解出一部分 subsong，
     # 卻沒有明顯錯誤訊息，Phase 2 會把截斷的素材當成正常資料餵進模型。
-    src_bytes = 0
-    for p in sources:
-        try:
-            src_bytes += p.stat().st_size
-        except OSError:
-            pass
-    est = estimate_from_source_bytes(
-        src_bytes, cfg.paths.unpacked_dir, label="解包產物（01_unpacked）"
-    )
-    print()
-    print(est.render())
-    if not est.sufficient and not args.force:
-        print(
-            f"\n {BAD} 空間不足，已中止（避免寫出殘缺的產物）。\n"
-            f"    三個選項：\n"
-            f"      1. 清出空間後重跑\n"
-            f"      2. 先用 --limit 5 小量驗證流程\n"
-            f"      3. 確定要硬跑：加 --force"
+    # dry-run 不寫檔，所以不該被空間預檢擋下 —— 否則使用者連
+    # 「看看會發生什麼」都做不到。
+    if not args.dry_run:
+        src_bytes = 0
+        for p in sources:
+            try:
+                src_bytes += p.stat().st_size
+            except OSError:
+                pass
+        est = estimate_from_source_bytes(
+            src_bytes, cfg.paths.unpacked_dir, label="解包產物（01_unpacked）"
         )
-        return 1
-    if not est.sufficient:
-        print(f"\n {WARN} 空間不足但你指定了 --force，繼續執行。")
+        print()
+        print(est.render())
+        if not est.sufficient and not args.force:
+            print(
+                f"\n {BAD} 空間不足，已中止（避免寫出殘缺的產物）。\n"
+                f"    三個選項：\n"
+                f"      1. 清出空間後重跑\n"
+                f"      2. 先用 --limit 5 小量驗證流程\n"
+                f"      3. 確定要硬跑：加 --force"
+            )
+            return 1
+        if not est.sufficient:
+            print(f"\n {WARN} 空間不足但你指定了 --force，繼續執行。")
     ok = fail = skipped = already = 0
     produced: list[Path] = []
 
