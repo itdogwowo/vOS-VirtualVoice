@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -249,26 +250,120 @@ def _ffmpeg_sample_rate(path: Path) -> int:
         return 0
 
 
+class _Scratch:
+    """
+    用完即丟的暫存資料夾，**清理失敗不會拋例外**。
+
+    這裡刻意不用 `tempfile.TemporaryDirectory()` / `mkdtemp()`，有兩個原因：
+
+    1. **`mkdtemp` 建立的目錄帶 0700 權限，在受限環境會變得不可寫。**
+       實測（Windows + 沙箱）：`mkdtemp` 建出來的目錄，連自己啟動的子程序
+       都寫不進去 —— `PermissionError: [Errno 13]`。原因是沙箱無法套用
+       chmod 0700，目錄的 ACL 因此不完整。改用一般的 `mkdir`（繼承父目錄
+       ACL）就完全正常。
+       症狀會很像「工具壞了或格式不支援」：vgmstream 明明找得到，卻說
+       產不出檔案。同一個機制也解釋了為什麼 `python -m venv` 會失敗。
+
+    2. **`TemporaryDirectory` 的清理走 `shutil.rmtree`（遞迴掃描）**，
+       在同樣的環境會**在離開 with 區塊時**拋 PermissionError ——
+       「工作其實做完了，卻死在收尾」，錯誤訊息完全指向清理而非任務本身。
+
+    所以：用 mkdir 建目錄，用「先刪檔、再 rmdir」清理，任何一步失敗都吞掉。
+    殘留的暫存目錄由 .gitignore 與作業系統自理，遠比讓整個批次中斷划算。
+    """
+
+    def __init__(self, prefix: str = "vos_") -> None:
+        self._prefix = prefix
+        self.name: str = ""
+
+    def __enter__(self) -> str:
+        bases: list[Path] = []
+        try:
+            from config import repo_root
+
+            bases.append(repo_root() / ".cache" / "tmp")
+        except Exception:  # pragma: no cover
+            pass
+        bases.append(Path(tempfile.gettempdir()))
+
+        last_error: OSError | None = None
+        for base in bases:
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                last_error = exc
+                continue
+            # 用 uuid 造唯一名稱，而不是 mkdtemp —— 見類別說明第 1 點
+            for _ in range(20):
+                candidate = base / f"{self._prefix}{uuid.uuid4().hex[:12]}"
+                try:
+                    candidate.mkdir()
+                except FileExistsError:
+                    continue
+                except OSError as exc:
+                    last_error = exc
+                    break
+                self.name = str(candidate)
+                return self.name
+        raise OSError(f"找不到可寫入的暫存目錄：{last_error}")
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self.cleanup()
+        return False  # 不吞掉原本的例外
+
+    def cleanup(self) -> None:
+        if not self.name:
+            return
+        root = Path(self.name)
+        try:
+            for entry in root.glob("*"):
+                try:
+                    if entry.is_file():
+                        entry.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        try:
+            root.rmdir()
+        except OSError:
+            pass  # 留著也無妨：不該為了收尾而讓整個批次失敗
+
+
+def scratch_dir(prefix: str = "vos_") -> _Scratch:
+    """
+    回傳一個「寫得進去」的暫存資料夾 context manager（用法同 TemporaryDirectory）。
+
+    優先使用專案內的 .cache/tmp（與 repo 同磁碟區，且通常一定可寫），
+    失敗才退回系統暫存。
+    """
+    return _Scratch(prefix)
+
+
 def _decode_vgmstream(path: Path, sample_rate: int | None = None) -> DecodeResult:
     """
     用 vgmstream-cli 解成 WAV（暫存檔），再交給 soundfile 讀。
 
-    vgmstream-cli 的關鍵參數：
-      -o <file>   輸出檔
-      -w          強制輸出 WAV（而非其他格式）
-      --loop-count 1  不重複（遊戲語音有 loop 標記時很重要）
+    命令列參數（依官方 doc/USAGE.md）：
+      -o <file>   輸出檔（用 .wav 副檔名即代表 WAV 輸出；不需要額外的 -w）
+      -i          不要循環。遊戲語音常有 loop 標記，不加這個會解出無限長的檔案。
+      -l 1.0      只取一圈循環（部分格式需要明確指定才不會拖長）
+
+    注意暫存檔一律走 scratch_dir()，不可用系統 Temp —— 見該函式的說明。
     """
     vgm = find_external_bin("vgmstream-cli")
     if not vgm:
         return DecodeResult(None, 0, "vgmstream", "未找到 vgmstream-cli")
 
-    with tempfile.TemporaryDirectory(prefix="vos_vgm_") as td:
+    with scratch_dir("vos_vgm_") as td:
         out = Path(td) / "out.wav"
-        args = [vgm, "-w", "-o", str(out), "-i", "--loop-count", "1", str(path)]
+        args = [vgm, "-i", "-l", "1.0", "-o", str(out), str(path)]
         proc = run_tool(args, check=False, timeout=600)
         if not out.is_file() or out.stat().st_size < 64:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
-            return DecodeResult(None, 0, "vgmstream", " | ".join(tail) or "vgmstream 未產生輸出")
+            return DecodeResult(
+                None, 0, "vgmstream", " | ".join(tail) or "vgmstream 未產生輸出"
+            )
 
         if sample_rate:
             # vgmstream 無法直接指定輸出取樣率，交給 ffmpeg；沒有 ffmpeg 就先讀原樣
@@ -418,6 +513,7 @@ __all__ = [
     "measure",
     "probe_backends",
     "resample",
+    "scratch_dir",
     "run_tool",
     "safe_db",
     "to_mono",
