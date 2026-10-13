@@ -95,8 +95,13 @@ from _audioio import (  # noqa: E402
 )
 import config  # noqa: E402  （repo_root 的環境變數覆寫需要整個模組）
 from config import PipelineConfig, find_external_bin, load_config  # noqa: E402
-from formats import FormatInfo, sniff_format  # noqa: E402
-from unpack import UnpackOptions, estimate_total_subsongs, unpack_one  # noqa: E402
+from formats import FORMAT_TABLE, FormatInfo, sniff_format  # noqa: E402
+from unpack import (  # noqa: E402
+    UnpackOptions,
+    estimate_total_subsongs,
+    probe_with_vgmstream,
+    unpack_one,
+)
 from audition import build_reel, filesystem_safe, list_candidates, plan_samples  # noqa: E402
 from tune import analyze, read_manifest, render_report, report_as_dict  # noqa: E402
 from report import collect, render, render_json  # noqa: E402
@@ -315,6 +320,43 @@ def cmd_doctor(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def sniff_with_fallback(path: Path, vgm_exe: str | None) -> tuple[FormatInfo, str]:
+    """
+    嗅探格式；自己的 magic 表認不出來時，改問 vgmstream。
+
+    為什麼要這樣做：我們的 magic 表只認得二十幾種格式，而 vgmstream 認得
+    幾百種。遊戲素材千奇百怪，遇到「未知格式」時繼續手寫 magic 判斷
+    是事倍功半 —— 直接問 vgmstream 快得多，也更可靠。
+
+    判定成功時回傳 `vgmstream_generic`，並把 decoder 設成 vgmstream，
+    這樣後續的 convert 也會用正確的後端處理它（而不是當成 unknown 跳過）。
+
+    Returns:
+        (FormatInfo, 額外說明)。說明為空字串代表是用自己的表判定出來的。
+    """
+    info = sniff_format(path)
+    if info.code != "unknown" or not vgm_exe:
+        return info, ""
+
+    probe = probe_with_vgmstream(path, vgm_exe)
+    if not probe.readable:
+        return info, probe.detail
+    return _make_vgmstream_info(probe), probe.summary
+
+
+def _make_vgmstream_info(probe) -> FormatInfo:
+    """把 vgmstream 的判定包成 FormatInfo（decoder 固定為 vgmstream）。"""
+    meta = FORMAT_TABLE["vgmstream_generic"]
+    return FormatInfo(
+        code="vgmstream_generic",
+        label=str(meta["label"]),
+        family=str(meta["family"]),
+        needs_unpack=bool(meta["needs_unpack"]),
+        decoder="vgmstream",
+        detail=probe.summary,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 子命令：scan
 # ---------------------------------------------------------------------------
@@ -331,10 +373,21 @@ def cmd_scan(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     by_format: dict[str, list[Path]] = {}
     total_bytes = 0
     ext_mismatch: list[tuple[Path, str]] = []
+    fallback_notes: dict[str, str] = {}
+    unknown_leftover: list[Path] = []
+
+    # 有 vgmstream 就當作「未知格式」的後備判定工具
+    vgm_exe = None if args.no_fallback else find_external_bin(
+        "vgmstream-cli", cfg.unpack_vgmstream_bin
+    )
 
     for p in sources:
-        info = sniff_format(p)
+        info, note = sniff_with_fallback(p, vgm_exe)
         by_format.setdefault(info.code, []).append(p)
+        if note:
+            fallback_notes.setdefault(info.code, note)
+        elif info.code == "unknown":
+            unknown_leftover.append(p)
         try:
             total_bytes += p.stat().st_size
         except OSError:
@@ -349,15 +402,39 @@ def cmd_scan(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     print(f"{'格式':<42}{'數量':>7}{'需解包':>8}")
     print("-" * 78)
     for code, files in sorted(by_format.items(), key=lambda kv: -len(kv[1])):
-        label = sniff_format(files[0]).label
-        needs = "是" if sniff_format(files[0]).needs_unpack else "否"
-        print(f"{label:<42}{len(files):>7}{needs:>8}")
+        # 用實際嗅探結果（含 vgmstream 後備判定），不要重新 sniff —— 那會
+        # 再跑一次外部程序，而且會把後備判定出來的格式顯示成「未知」。
+        if fallback_notes.get(code):
+            label = str(FORMAT_TABLE["vgmstream_generic"]["label"])
+            needs = "否"  # 後備判定代表 vgmstream 能直接解，不需先解包
+            note = f"   ← {fallback_notes[code]}"
+        else:
+            info_first = sniff_format(files[0])
+            label = info_first.label
+            needs = "是" if info_first.needs_unpack else "否"
+            note = ""
+        print(f"{label:<42}{len(files):>7}{needs:>8}{note}")
 
-    need_unpack = [f for c, fs in by_format.items() for f in fs if sniff_format(f).needs_unpack]
+    # 需不需要解包：以「是否走 vgmstream 且為容器」為準
+    def _needs_unpack_code(code: str) -> bool:
+        if code == "vgmstream_generic":
+            return False  # 後備判定代表 vgmstream 能直接解
+        return sniff_format(by_format[code][0]).needs_unpack
+
+    need_unpack = [
+        f for c, fs in by_format.items() if _needs_unpack_code(c) for f in fs
+    ]
     direct = len(sources) - len(need_unpack)
 
     print("-" * 78)
     print(f"  可直接解碼：{direct} 個   需先解包：{len(need_unpack)} 個")
+
+    if fallback_notes:
+        n_fallback = sum(len(by_format[c]) for c in fallback_notes)
+        print(
+            f"\n{INFO} 有 {n_fallback} 個檔案是「vgmstream 可解碼但格式未辨識」"
+            f"—— 這不影響流程，會直接用 vgmstream 解碼。"
+        )
 
     if ext_mismatch:
         print(f"\n{WARN} 副檔名與實際格式不符 {len(ext_mismatch)} 個（前 8 筆）：")
@@ -1144,6 +1221,11 @@ def build_parser() -> argparse.ArgumentParser:
             "--no-probe", action="store_true", help="解包前不探測 subsong 數量（較快但無安全上限）"
         )
         p.add_argument("-v", "--verbose", action="store_true", help="逐檔輸出（預設每 25 檔一摘要）")
+        p.add_argument(
+            "--no-fallback",
+            action="store_true",
+            help="scan 時不用 vgmstream 判定未知格式（較快，適合檔案數上萬時）",
+        )
 
     for name, help_text in (
         ("doctor", "檢查 Python 依賴 / 外部工具 / 資料夾 / 目標格式"),
