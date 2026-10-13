@@ -32,6 +32,30 @@ class ConfigError(ValueError):
 #: 未設定時一律以「本檔案的所在位置」推導，因此正常使用完全不受影響。
 ENV_REPO_ROOT = "VOS_REPO_ROOT"
 
+#: 環境變數：覆寫外部工具路徑。
+#:
+#: 為什麼需要：`scripts/_audioio.py` 是底層模組，它會自己去找 vgmstream/ffmpeg，
+#: 但不該依賴 CLI 的設定物件（那會形成循環匯入）。用環境變數當橋樑最單純：
+#: CLI 讀完設定後把路徑放進環境，底層模組就能拿到同一個值。
+#:
+#: 沒有這層會出現一種很隱晦的失敗：設定檔指向 tools/bin/ 的 vgmstream，
+#: unpack 找得到，但 convert 解碼時卻說「未找到 vgmstream-cli」。
+ENV_TOOL_OVERRIDES = {
+    "vgmstream-cli": "VOS_VGMSTREAM_BIN",
+    "ffmpeg": "VOS_FFMPEG_BIN",
+    "ffprobe": "VOS_FFPROBE_BIN",
+}
+
+
+def export_tool_overrides(cfg: "PipelineConfig") -> None:
+    """
+    把設定檔裡的外部工具路徑匯出成環境變數，供底層模組使用。
+    由 CLI 在讀完設定後呼叫一次即可。
+    """
+    value = cfg.unpack_vgmstream_bin
+    if value and value.lower() != "auto":
+        os.environ[ENV_TOOL_OVERRIDES["vgmstream-cli"]] = value
+
 
 def repo_root() -> Path:
     """回傳 repo 根目錄（本檔案位於 <root>/scripts/config.py）。"""
@@ -55,6 +79,7 @@ def find_external_bin(name: str, hint: str | None = None) -> str | None:
     跨平台尋找外部執行檔 (ffmpeg / ffprobe / vgmstream-cli ...)。
 
     搜尋順序：
+      0. 環境變數覆寫（由 CLI 依設定檔匯出，見 export_tool_overrides）
       1. settings 明確指定的路徑（相對 repo 根目錄）
       2. repo 內建 tools/bin/（各平台自行放二進位檔的地方）
       3. 系統 PATH（含 Windows 的 .exe/.cmd/.bat 與 Unix 無副檔名）
@@ -64,6 +89,17 @@ def find_external_bin(name: str, hint: str | None = None) -> str | None:
     exe_names = [name]
     if os.name == "nt":  # Windows：PATH 查找需要帶副檔名
         exe_names = [f"{name}{ext}" for ext in (".exe", ".cmd", ".bat", "")]
+
+    # 0) 環境變數覆寫 —— 讓底層模組不需要依賴設定物件
+    env_var = ENV_TOOL_OVERRIDES.get(name)
+    if env_var:
+        from_env = os.environ.get(env_var)
+        if from_env:
+            candidate = Path(from_env)
+            if not candidate.is_absolute():
+                candidate = repo_root() / candidate
+            if candidate.is_file():
+                return str(candidate)
 
     if hint and hint.lower() != "auto":
         p = Path(hint)
@@ -166,6 +202,18 @@ class PipelineConfig:
     #: 意外全解會佔滿磁碟並讓後續階段變得極慢。
     unpack_max_subsongs: int = 3000
     scan_extensions: tuple[str, ...] = (".wem", ".ogg", ".wav", ".flac")
+    #: 是否把「沒有副檔名」的檔案也納入掃描。
+    #:
+    #: 為什麼要：從大封裝（bigfile）解出來的檔案常常沒有副檔名，
+    #: 需要靠 magic bytes 或 TXTH 才能玩。略過它們等於默默漏掉素材。
+    scan_extensionless: bool = True
+    #: 是否把「不在 scan_extensions 清單裡」的檔案也納入掃描（靠內容嗅探判斷）。
+    #:
+    #: 為什麼要：遊戲用的副檔名千奇百怪（.bin/.dat/.snd/.xwb/.sab…），
+    #: 每遇到一種就改一次設定檔很煩，而且你會先卡住一次才發現。
+    #: 代價是掃描會多看一些非音訊檔，但它們會被嗅探成 unknown 並歸類，
+    #: 不會污染下游。
+    scan_unknown_ext: bool = False
     decode_backend_priority: tuple[str, ...] = ("soundfile", "ffmpeg", "vgmstream")
     source_file: Path = field(default_factory=default_config_path)
 
@@ -324,6 +372,8 @@ def load_config(path: str | os.PathLike[str] | None = None) -> PipelineConfig:
         unpack_extra_args=tuple(unpack_raw.get("extra_args", []) or []),
         unpack_max_subsongs=int(unpack_raw.get("max_subsongs", 3000)),
         scan_extensions=exts,
+        scan_extensionless=bool(scan_raw.get("include_extensionless", True)),
+        scan_unknown_ext=bool(scan_raw.get("include_unknown_extensions", False)),
         decode_backend_priority=tuple(
             decode_raw.get("backend_priority", ["soundfile", "ffmpeg", "vgmstream"])
         ),
@@ -335,11 +385,13 @@ __all__ = [
     "ConfigError",
     "DurationFilter",
     "ENV_REPO_ROOT",
+    "ENV_TOOL_OVERRIDES",
     "Paths",
     "PipelineConfig",
     "QualityGate",
     "TargetFormat",
     "default_config_path",
+    "export_tool_overrides",
     "find_external_bin",
     "load_config",
     "repo_root",

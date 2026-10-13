@@ -70,11 +70,22 @@
   },
 
   "scan": {
-    "$comment": "要掃描的副檔名（不分大小寫）。同時包含『容器』與『已是音訊』兩類。",
+    "$comment": [
+      "要掃描哪些檔案。extensions 是『依副檔名』的白名單。",
+      "include_extensionless: 沒有副檔名的檔案也納入。從大封裝（bigfile）解出來的",
+      "  檔案常常沒有副檔名，略過它們等於默默漏掉素材。這些檔案會靠 magic bytes 判斷，",
+      "  或由 vgmstream 後備判定接手。",
+      "include_unknown_extensions: 不在 extensions 清單裡的檔案也納入（靠內容嗅探）。",
+      "  遊戲用的副檔名千奇百怪（.bin/.dat/.snd/.xwb/.sab…）。預設關閉以免掃到大量非音訊檔；",
+      "  若 scan 說『找不到目標副檔名』而素材確實在裡面，就打開它。"
+    ],
     "extensions": [
       ".wem", ".acb", ".awb", ".cpk", ".fsb", ".bank", ".bnk",
-      ".ogg", ".wav", ".flac", ".mp3", ".m4a", ".aac", ".opus", ".adx", ".hca"
-    ]
+      ".ogg", ".wav", ".flac", ".mp3", ".m4a", ".aac", ".opus", ".adx", ".hca",
+      ".xwb", ".xsb", ".sab", ".sgb", ".wavc", ".laac", ".lwav", ".logg"
+    ],
+    "include_extensionless": true,
+    "include_unknown_extensions": false
   },
 
   "decode": {
