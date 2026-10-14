@@ -47,6 +47,10 @@ python scripts/phase1_prep.py env
 #     檢查精度支援、實際配置記憶體、跑一次 backward、確認可用 RAM
 python scripts/phase1_prep.py precheck
 
+# 3d) 訓練啟動器：precheck 擋門 + 參數自動寫入設定檔
+#     有阻擋條件就不會啟動（訓練失敗的代價是數小時）
+python scripts/phase1_prep.py train
+
 # 4) 把遊戲語音放進 data/00_raw/（可含子資料夾），然後嗅探真實格式
 python scripts/phase1_prep.py scan
 
@@ -124,6 +128,7 @@ vOS-VirtualVoice/
 │   ├── hwinfo.py                  # CUDA/MPS/CPU 偵測（不依賴 WMI）
 │   ├── trainfit.py                # VRAM -> 訓練參數擬合
 │   ├── precheck.py                # 訓練前環境自檢（合成張量，不需素材）
+│   ├── train.py                   # 訓練啟動器（precheck 擋門 + 參數自動填入）
 ├── scripts/
 │   ├── phase1_prep.py             # 主程式（doctor/scan/unpack/convert/audition/tune/report/all）
 │   ├── run_phase1.ps1 / .sh       # 一鍵入口（Windows / macOS+Linux）

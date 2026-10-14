@@ -111,6 +111,13 @@ from diag import diagnose_all  # noqa: E402
 from hwinfo import detect_torch_environment, render_env_report  # noqa: E402
 from trainfit import fit_training_params, render_params  # noqa: E402
 from precheck import run_precheck, render_precheck  # noqa: E402
+from train import (  # noqa: E402
+    build_training_config,
+    launch_training,
+    plan_training,
+    render_plan,
+    write_config,
+)
 
 # ---------------------------------------------------------------------------
 # Manifest schema（欄位順序固定，方便 Phase 4 用 pandas 讀）
@@ -1441,6 +1448,82 @@ def cmd_precheck(cfg: PipelineConfig, args: argparse.Namespace) -> int:
 
     return 0 if report.passed else 4
 
+
+
+# ---------------------------------------------------------------------------
+# 子命令：train（Phase 3 訓練啟動器）
+# ---------------------------------------------------------------------------
+def cmd_train(cfg: PipelineConfig, args: argparse.Namespace) -> int:
+    """
+    把 precheck 的判斷接進訓練啟動流程。
+
+    設計原則：**precheck 是強制擋門，不是建議。**
+    訓練失敗的代價是數小時，而擋在門口的代價是 10 秒。
+    參數也會自動寫進設定檔 —— 人抄數字一定會出錯，而且出錯時不會報錯，
+    訓練只是跑得比較差。
+    """
+    root = repo_root()
+    env = detect_torch_environment()
+    params = fit_training_params(env)
+    pre = run_precheck(env, params, checkpoint_dir=cfg.paths.reports_dir.parent)
+
+    data_dir = Path(args.data_dir) if args.data_dir else cfg.paths.standardized_dir
+    if not data_dir.is_absolute():
+        data_dir = root / data_dir
+    output_dir = (
+        Path(args.output_dir) if args.output_dir else (cfg.paths.reports_dir / "train")
+    )
+    if not output_dir.is_absolute():
+        output_dir = root / output_dir
+
+    plan = plan_training(
+        env,
+        params,
+        pre,
+        cfg=cfg,
+        data_dir=data_dir,
+        output_dir=output_dir,
+    )
+
+    print(render_plan(plan, params))
+
+    # 參數一律寫出 —— 就算有阻擋條件，使用者也需要看到擬合結果
+    config = build_training_config(
+        env, params, data_dir=data_dir, output_dir=output_dir
+    )
+    config_path = output_dir / "vos_training_config.json"
+    if not args.dry_run:
+        write_config(plan, config, config_path)
+
+    if not plan.ready:
+        print(
+            f"\n {BAD} 有 {len(plan.blockers)} 項阻擋條件，未啟動訓練。\n"
+            f"    修正後重跑：python scripts/phase1_prep.py train"
+        )
+        return 4
+
+    if args.dry_run:
+        print(f"\n {INFO} DRY-RUN：環境就緒，但未啟動訓練。")
+        return 0
+
+    if not args.yes:
+        print(
+            f"\n {INFO} 環境就緒。要真的啟動訓練請加 --yes\n"
+            f"    （訓練會執行數小時，所以刻意不預設啟動）"
+        )
+        return 0
+
+    print(f"\n {OK} 啟動訓練：{plan.gpt_sovits_dir}")
+    print(f"    設定檔：{config_path}")
+    print("    （訓練是獨立行程；本工具結束不會中斷它）\n")
+    try:
+        proc = launch_training(plan.gpt_sovits_dir, config_path)
+    except RuntimeError as exc:
+        print(f" {BAD} {exc}")
+        return 1
+    return proc.returncode
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1497,6 +1580,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("selftest", "用合成素材驗證工具鏈本身能不能動（不需要你的素材）"),
         ("env", "偵測 CUDA/MPS/CPU 並依 VRAM 擬合訓練參數（Phase 3，不需素材）"),
         ("precheck", "訓練前環境自檢：用合成張量提前引爆會失敗的問題"),
+        ("train", "訓練啟動器：precheck 擋門 + 參數自動寫入設定檔"),
         ("all", "依序執行 scan → unpack → convert"),
     ):
         sp = sub.add_parser(name, help=help_text)
@@ -1533,6 +1617,22 @@ def build_parser() -> argparse.ArgumentParser:
                 "--json",
                 action="store_true",
                 help="同時輸出機器可讀的 JSON（data/_reports/phase3_precheck.json）",
+            )
+        if name == "train":
+            sp.add_argument(
+                "--yes",
+                action="store_true",
+                help="真的啟動訓練（不加則只做規劃與寫出設定檔）",
+            )
+            sp.add_argument(
+                "--data-dir",
+                default="",
+                help="訓練資料集目錄（預設 data/02_wav24_48k）",
+            )
+            sp.add_argument(
+                "--output-dir",
+                default="",
+                help="訓練輸出目錄（預設 data/_reports/train）",
             )
 
     return parser
@@ -1575,6 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
         "selftest": cmd_selftest,
         "env": cmd_env,
         "precheck": cmd_precheck,
+        "train": cmd_train,
         "all": lambda c, a: _cmd_all(c, a, parser),
     }
     try:

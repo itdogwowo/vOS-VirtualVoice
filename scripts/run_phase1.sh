@@ -53,6 +53,7 @@ if [[ $# -eq 0 ]]; then
   selftest   用合成素材驗證工具鏈能不能動（不需要你的素材）
   env        偵測 CUDA/MPS/CPU 並依 VRAM 擬合訓練參數
   precheck   訓練前環境自檢（合成張量，提前引爆會失敗的問題）
+  train      訓練啟動器（precheck 擋門 + 參數自動填入）
   all        依序執行 scan -> unpack -> convert
 
 例：  bash scripts/run_phase1.sh scan

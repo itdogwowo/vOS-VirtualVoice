@@ -65,6 +65,7 @@ if (-not $Args -or $Args.Count -eq 0) {
     Write-Host "  selftest   Verify the toolkit works on this machine (no material needed)"
     Write-Host "  env        Detect CUDA/MPS/CPU and fit training params to VRAM"
     Write-Host "  precheck   Pre-training environment self-check (synthetic tensors)"
+    Write-Host "  train      Training launcher (precheck gate + auto parameters)"
     Write-Host "  all        Run scan -> unpack -> convert in order"
     Write-Host ""
     Write-Host "Examples:"

@@ -88,6 +88,15 @@
     "include_unknown_extensions": false
   },
 
+  "training": {
+    "$comment": [
+      "GPT-SoVITS 的安裝位置。auto = 自動尋找（repo 內 GPT-SoVITS/ -> 家目錄）。",
+      "若你裝在別處，改成相對路徑或絕對路徑。",
+      "訓練啟動器會用它來找 s1_train.py / s2_train.py。"
+    ],
+    "gpt_sovits_dir": "auto"
+  },
+
   "decode": {
     "$comment": [
       "音訊解碼後端優先序。soundfile = libsndfile（快、純 Python 依賴）。",

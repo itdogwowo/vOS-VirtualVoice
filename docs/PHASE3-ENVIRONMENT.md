@@ -180,7 +180,61 @@ GPT-SoVITS 的微調在純 CPU 上：
 
 ---
 
-## 6. 相關文件
+---
+
+## 7. 訓練啟動器（`train`）
+
+`env` 算參數、`precheck` 找問題 —— 但那些結果若只印在畫面上，就變成
+「你必須記得先跑，然後手動把數字抄進設定檔」。`train` 把三件事接起來：
+
+```
+precheck（自動擋門）→ 擬合參數寫成設定檔 → 啟動訓練
+```
+
+```bash
+# 規劃模式：檢查環境、寫出設定檔，但不啟動（預設）
+python scripts/phase1_prep.py train
+
+# 真的啟動訓練
+python scripts/phase1_prep.py train --yes
+```
+
+### 三個刻意的設計
+
+| 設計 | 為什麼 |
+|------|--------|
+| **precheck 是強制擋門，不是建議** | 訓練失敗的代價是數小時，擋在門口的代價是 10 秒。有 `fail` 就拒絕啟動。 |
+| **參數自動寫進設定檔** | 人抄數字一定會出錯，而且出錯時**不會報錯** —— 訓練只是跑得比較差，你無從察覺。 |
+| **缺件時給出精確的下一步** | 不是「失敗」，而是「`git clone …`」或「`pip install …`」。 |
+
+### 輸出範例（典型的第一次使用狀態）
+
+```
+ 訓練參數（依本機 VRAM 擬合）：
+   batch 1 × accum 8 = 等效 8　|　精度 fp32
+   gradient checkpointing True　|　資料集快取 False　|　workers 0
+
+ 阻擋條件（5 項）：
+   [X] [環境] GPU 可用性：沒有可用的 GPU → 純 CPU 訓練在實務上不可行
+   [X] [環境] 系統記憶體：可用僅 5.1 GB（總計 31.4 GB） → 請關閉其他程式
+   [X] [缺件] 找不到 GPT-SoVITS → git clone https://github.com/RVC-Boss/GPT-SoVITS ...
+   [X] [缺件] 缺少訓練依賴：pytorch_lightning, librosa, ffmpeg
+              → pip install pytorch-lightning librosa ffmpeg-python
+   [X] [缺件] 資料集目錄不存在 → 先跑完 Phase 1 / Phase 2 產出乾淨素材
+
+ 為什麼要在啟動前擋下來：訓練失敗的代價是數小時，而擋在門口的代價是 10 秒。
+```
+
+`train` 有阻擋條件時回傳 exit 4；參數設定檔仍會寫出（在
+`data/_reports/train/vos_training_config.json`），因為就算還不能訓練，
+你也需要看到擬合結果。
+
+> **注意**：訓練會執行數小時，所以 `train` **刻意不預設啟動** ——
+> 要加 `--yes` 才會真的開始。訓練以獨立行程執行，本工具結束不會中斷它。
+
+---
+
+## 8. 相關文件
 
 - [Phase 1 操作手冊](PHASE1-INGEST.md) — 素材處理（**不依賴 GPU**，可先做完）
 - [格式決策手冊](FORMAT-PLAYBOOK.md) — 音訊格式排查

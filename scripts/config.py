@@ -214,6 +214,8 @@ class PipelineConfig:
     #: 代價是掃描會多看一些非音訊檔，但它們會被嗅探成 unknown 並歸類，
     #: 不會污染下游。
     scan_unknown_ext: bool = False
+    #: GPT-SoVITS 的安裝位置（"auto" = 自動尋找）
+    training_gpt_sovits_dir: str = "auto"
     decode_backend_priority: tuple[str, ...] = ("soundfile", "ffmpeg", "vgmstream")
     source_file: Path = field(default_factory=default_config_path)
 
@@ -343,6 +345,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> PipelineConfig:
     scan_raw = raw.get("scan", {})
     decode_raw = raw.get("decode", {})
     group_raw = raw.get("grouping", {})
+    training_raw = raw.get("training", {})
 
     group_by = str(group_raw.get("by", "none")).lower()
     if group_by not in ("none", "folder"):
@@ -374,6 +377,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> PipelineConfig:
         scan_extensions=exts,
         scan_extensionless=bool(scan_raw.get("include_extensionless", True)),
         scan_unknown_ext=bool(scan_raw.get("include_unknown_extensions", False)),
+        training_gpt_sovits_dir=str(training_raw.get("gpt_sovits_dir", "auto")),
         decode_backend_priority=tuple(
             decode_raw.get("backend_priority", ["soundfile", "ffmpeg", "vgmstream"])
         ),

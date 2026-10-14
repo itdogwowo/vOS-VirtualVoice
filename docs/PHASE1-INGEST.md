@@ -572,6 +572,7 @@ python scripts/phase1_prep.py report
 ```bash
 python scripts/phase1_prep.py env        # 偵測 CUDA/MPS/CPU 並擬合訓練參數
 python scripts/phase1_prep.py precheck   # 訓練前環境自檢（合成張量）
+python scripts/phase1_prep.py train      # 訓練啟動器（規劃模式，不啟動）
 ```
 
 詳見 [Phase 3 環境配置](PHASE3-ENVIRONMENT.md)。
