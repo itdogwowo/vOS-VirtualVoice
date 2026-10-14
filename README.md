@@ -32,25 +32,29 @@ Phase 1 的六個子命令（`scan` / `unpack` / `convert` / `audition` / `tune`
 # 1) 安裝依賴
 pip install -r requirements.txt
 
-# 2) 檢查環境（Python 依賴 / ffmpeg / vgmstream / 資料夾）
+# 2) 先確認工具鏈在這台機器上能不能動（不需要任何素材，幾秒鐘）
+#    用合成音訊跑一次真正的流程：標準化 → 篩選 → 試聽 → 報告
+python scripts/phase1_prep.py selftest
+
+# 3) 檢查環境（Python 依賴 / ffmpeg / vgmstream / 資料夾）
 python scripts/phase1_prep.py doctor
 
-# 3) 把遊戲語音放進 data/00_raw/（可含子資料夾），然後嗅探真實格式
+# 4) 把遊戲語音放進 data/00_raw/（可含子資料夾），然後嗅探真實格式
 python scripts/phase1_prep.py scan
 
-# 4) 解包遊戲容器（若 scan 顯示「需解包」才需要）
+# 5) 解包遊戲容器（若 scan 顯示「需解包」才需要）
 python scripts/phase1_prep.py unpack
 
-# 5) 標準化：24bit/48kHz 單聲道 WAV + 1.5~15 秒時長篩選 + 品質關卡
+# 6) 標準化：24bit/48kHz 單聲道 WAV + 1.5~15 秒時長篩選 + 品質關卡
 python scripts/phase1_prep.py convert
 
-# 6) 人工試聽驗收：抽樣 → 產生「試聽帶」與對照清單（不可省略的一步）
+# 7) 人工試聽驗收：抽樣 → 產生「試聽帶」與對照清單（不可省略的一步）
 python scripts/phase1_prep.py audition --per-group 5
 
-# 7) 不確定門檻該不該調？讓數據說話
+# 8) 不確定門檻該不該調？讓數據說話
 python scripts/phase1_prep.py tune
 
-# 8) 產生綜合報告（驗收清單 + 下一步指令，Phase 1 → Phase 2 的交接文件）
+# 9) 產生綜合報告（驗收清單 + 下一步指令，Phase 1 → Phase 2 的交接文件）
 python scripts/phase1_prep.py report
 
 # 或一條龍（scan → unpack → convert）

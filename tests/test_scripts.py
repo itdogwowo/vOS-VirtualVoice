@@ -189,3 +189,68 @@ class TestRepoLineEndings:
                 continue
             raw = script.read_bytes()
             assert b"\r\n" not in raw, f"{script.relative_to(REPO)} 含 CRLF 行尾"
+
+
+# ---------------------------------------------------------------------------
+# 5. 文件與程式碼不可脫節
+# ---------------------------------------------------------------------------
+class TestDocsCoverEverySubcommand:
+    """
+    文件必須提到每一個子命令。
+
+    為什麼要自動化：這已經**脫節兩次**了。
+      1. 啟動腳本的用法提示漏了 audition / tune / report
+      2. selftest 補回後，README 與主手冊都沒提到它 —— 而它正好是
+         「還沒有素材」時唯一能跑的指令，也就是使用者最需要看到的那一個
+
+    這種脫節不會報錯、不會有症狀，只會讓照著文件操作的人卡住。
+    只能靠自動化守住。
+    """
+
+    @staticmethod
+    def _subcommands() -> list[str]:
+        import sys as _sys
+
+        _sys.path.insert(0, str(REPO / "scripts"))
+        from phase1_prep import build_parser
+
+        parser = build_parser()
+        names: list[str] = []
+        for action in parser._subparsers._group_actions:  # type: ignore[attr-defined]
+            names.extend(action.choices)
+        return sorted(names)
+
+    def test_readme_covers_every_subcommand(self) -> None:
+        text = (REPO / "README.md").read_text(encoding="utf-8")
+        missing = [n for n in self._subcommands() if n not in text]
+        assert not missing, f"README.md 未提到這些子命令：{missing}"
+
+    def test_manual_covers_every_subcommand(self) -> None:
+        text = (REPO / "docs" / "PHASE1-INGEST.md").read_text(encoding="utf-8")
+        missing = [n for n in self._subcommands() if n not in text]
+        assert not missing, f"PHASE1-INGEST.md 未提到這些子命令：{missing}"
+
+    def test_readme_documents_selftest_as_first_step(self) -> None:
+        """
+        selftest 必須出現在「還沒有素材時該做什麼」的位置 ——
+        它是唯一不需要素材就能驗證環境的指令。
+        """
+        text = (REPO / "README.md").read_text(encoding="utf-8")
+        assert "selftest" in text
+        # 它應該排在 scan 之前（先驗證環境，再處理素材）
+        assert text.index("selftest") < text.index("phase1_prep.py scan"), (
+            "selftest 應排在 scan 之前：先確認工具能動，再處理素材"
+        )
+
+    def test_documented_paths_exist(self) -> None:
+        """文件引用的關鍵路徑必須真的存在。"""
+        for rel in (
+            "docs/PHASE1-INGEST.md",
+            "docs/FORMAT-PLAYBOOK.md",
+            "configs/pipeline.default.json",
+            "requirements.txt",
+            "scripts/phase1_prep.py",
+            "scripts/run_phase1.ps1",
+            "scripts/run_phase1.sh",
+        ):
+            assert (REPO / rel).exists(), f"文件引用了不存在的路徑：{rel}"
