@@ -540,3 +540,31 @@ class TestScanConvertConsistency:
         assert any("fake-pcm16" in r["src_format_label"] for r in rows), [
             r["src_format_label"] for r in rows
         ]
+
+# ===========================================================================
+# 空目錄時的訊息品質
+# ===========================================================================
+class TestEmptyScanMessaging:
+    """
+    `scan` 在空目錄時必須讓人知道「工具是好的」。
+
+    這個情境其實是最常見的第一次接觸：使用者剛 clone 下來、還沒放素材，
+    先跑一次 scan 看看會怎樣。如果訊息只說「找不到檔案」，很容易被解讀成
+    「工具壞了」或「我裝錯了」—— 而真正的下一步（先跑 selftest 驗證環境）
+    就永遠不會被執行。
+    """
+
+    def test_empty_scan_points_to_selftest(self, tmp_dir: Path) -> None:
+        root = _scaffold(tmp_dir / "repo", grouping="none")
+        proc = _cli(["scan"], root)
+        assert proc.returncode == 1
+        assert "不代表工具壞了" in proc.stdout, proc.stdout
+        assert "selftest" in proc.stdout, "必須指出可以立刻驗證環境的指令"
+        assert "doctor" in proc.stdout
+
+    def test_empty_scan_lists_accepted_extensions(self, tmp_dir: Path) -> None:
+        """要列出接受的副檔名，使用者才知道自己的素材格式對不對。"""
+        root = _scaffold(tmp_dir / "repo", grouping="none")
+        proc = _cli(["scan"], root)
+        for ext in (".wem", ".ogg", ".wav", ".fsb"):
+            assert ext in proc.stdout, f"未列出 {ext}"

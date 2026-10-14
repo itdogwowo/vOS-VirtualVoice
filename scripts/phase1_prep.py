@@ -380,6 +380,15 @@ def cmd_scan(cfg: PipelineConfig, args: argparse.Namespace) -> int:
         print(f"{WARN} {rel(cfg.paths.raw_dir, root)} 內找不到任何目標副檔名：")
         print(f"   {', '.join(cfg.scan_extensions)}")
         print("   請把遊戲語音放進該資料夾（可含子資料夾）。")
+        # 只看「找不到檔案」很容易讓人以為工具壞了。明確講出「工具是好的」，
+        # 並給一條現在就能跑、完全不需要素材的指令。
+        print(
+            f"\n{INFO} 這不代表工具壞了 —— 只是還沒有素材可以掃。\n"
+            f"   想先確認工具在這台機器上能不能動（不需要任何素材）：\n"
+            f"     python scripts/phase1_prep.py selftest\n"
+            f"   想確認環境缺什麼：\n"
+            f"     python scripts/phase1_prep.py doctor"
+        )
         return 1
 
     by_format: dict[str, list[Path]] = {}
