@@ -110,6 +110,7 @@ from space import estimate_from_source_bytes  # noqa: E402
 from diag import diagnose_all  # noqa: E402
 from hwinfo import detect_torch_environment, render_env_report  # noqa: E402
 from trainfit import fit_training_params, render_params  # noqa: E402
+from precheck import run_precheck, render_precheck  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Manifest schema（欄位順序固定，方便 Phase 4 用 pandas 讀）
@@ -1398,6 +1399,49 @@ def cmd_env(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     return 0 if report.gpu_available else 3
 
 # ---------------------------------------------------------------------------
+# 子命令：precheck（訓練前環境自檢）
+# ---------------------------------------------------------------------------
+def cmd_precheck(cfg: PipelineConfig, args: argparse.Namespace) -> int:
+    """
+    在投入數小時訓練之前，用合成張量把會失敗的問題提前引爆。
+
+    與 `env` 的差別：`env` 回答「我有什麼裝置」，precheck 回答
+    「這個環境真的能跑完一次訓練嗎」。後者會實際配置記憶體、跑一次
+    backward pass、並驗證精度支援 —— 那些問題通常在訓練進入第一個
+    backward 之後才引爆，而那時你已經等了很久。
+    """
+    root = repo_root()
+    env = detect_torch_environment()
+    params = fit_training_params(env)
+    report = run_precheck(
+        env, params, checkpoint_dir=cfg.paths.reports_dir.parent
+    )
+
+    print(render_precheck(report))
+
+    if args.json:
+        payload = {
+            "passed": report.passed,
+            "checks": [
+                {
+                    "name": c.name,
+                    "status": c.status,
+                    "detail": c.detail,
+                    "hint": c.hint,
+                }
+                for c in report.checks
+            ],
+        }
+        out = cfg.paths.reports_dir / "phase3_precheck.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n 機器可讀版本：{rel(out, root)}")
+
+    return 0 if report.passed else 4
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -1452,6 +1496,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("report", "產生 Phase 1 綜合報告（驗收清單 + 下一步指令，交接用）"),
         ("selftest", "用合成素材驗證工具鏈本身能不能動（不需要你的素材）"),
         ("env", "偵測 CUDA/MPS/CPU 並依 VRAM 擬合訓練參數（Phase 3，不需素材）"),
+        ("precheck", "訓練前環境自檢：用合成張量提前引爆會失敗的問題"),
         ("all", "依序執行 scan → unpack → convert"),
     ):
         sp = sub.add_parser(name, help=help_text)
@@ -1482,6 +1527,12 @@ def build_parser() -> argparse.ArgumentParser:
                 "--json",
                 action="store_true",
                 help="同時輸出機器可讀的 JSON（data/_reports/phase3_env.json）",
+            )
+        if name == "precheck":
+            sp.add_argument(
+                "--json",
+                action="store_true",
+                help="同時輸出機器可讀的 JSON（data/_reports/phase3_precheck.json）",
             )
 
     return parser
@@ -1523,6 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
         "report": cmd_report,
         "selftest": cmd_selftest,
         "env": cmd_env,
+        "precheck": cmd_precheck,
         "all": lambda c, a: _cmd_all(c, a, parser),
     }
     try:

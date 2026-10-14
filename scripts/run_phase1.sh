@@ -51,6 +51,8 @@ if [[ $# -eq 0 ]]; then
   tune       分析 manifest，建議該不該調整門檻
   report     產生綜合報告（驗收清單 + 下一步）
   selftest   用合成素材驗證工具鏈能不能動（不需要你的素材）
+  env        偵測 CUDA/MPS/CPU 並依 VRAM 擬合訓練參數
+  precheck   訓練前環境自檢（合成張量，提前引爆會失敗的問題）
   all        依序執行 scan -> unpack -> convert
 
 例：  bash scripts/run_phase1.sh scan

@@ -565,6 +565,19 @@ python scripts/phase1_prep.py report
 
 ---
 
+## 7.3 順帶一提：Phase 3 的環境指令
+
+以下兩個指令**不需要素材**，也不屬於 Phase 1，但你可以隨時先跑，提早知道硬體狀況：
+
+```bash
+python scripts/phase1_prep.py env        # 偵測 CUDA/MPS/CPU 並擬合訓練參數
+python scripts/phase1_prep.py precheck   # 訓練前環境自檢（合成張量）
+```
+
+詳見 [Phase 3 環境配置](PHASE3-ENVIRONMENT.md)。
+
+---
+
 ## 8. 跨平台注意事項
 
 本階段所有腳本都已處理以下差異，你不需要手動調整：
