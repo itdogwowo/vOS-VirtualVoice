@@ -288,6 +288,7 @@ def collect(
     quality_gate,
     scan_extensions: tuple[str, ...],
     do_scan: bool = True,
+    cfg=None,
 ) -> Phase1Report:
     """收集所有 Phase 1 產物與狀態。"""
     report = Phase1Report(generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -311,7 +312,7 @@ def collect(
 
     # 環境後端
     report.backends = [
-        (b.name, b.available, b.version) for b in probe_backends()
+        (b.name, b.available, b.version) for b in probe_backends(cfg)
     ]
 
     # 掃描 00_raw（唯讀）

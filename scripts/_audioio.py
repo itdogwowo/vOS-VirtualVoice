@@ -69,8 +69,15 @@ class BackendStatus:
     note: str = ""
 
 
-def probe_backends() -> list[BackendStatus]:
-    """回傳所有後端的可用狀態（給 doctor 用）。"""
+def probe_backends(cfg=None) -> list[BackendStatus]:
+    """
+    回傳所有後端的可用狀態（給 doctor / report 用）。
+
+    Args:
+        cfg: 可選的 PipelineConfig。給了就會考慮設定檔裡指定的工具路徑 ——
+             否則使用者明明設好了 unpack.vgmstream_bin，仍會顯示「未找到」，
+             doctor 與 report 兩份報告也會互相矛盾。
+    """
     statuses: list[BackendStatus] = []
 
     statuses.append(
@@ -82,23 +89,42 @@ def probe_backends() -> list[BackendStatus]:
         )
     )
 
-    ffmpeg = find_external_bin("ffmpeg")
+    if cfg is not None:
+        try:
+            from diag import locate_tool
+
+            ffmpeg, ff_source = locate_tool("ffmpeg", cfg)
+            vgm, vgm_source = locate_tool("vgmstream-cli", cfg)
+        except Exception:  # pragma: no cover
+            ffmpeg, vgm = find_external_bin("ffmpeg"), find_external_bin("vgmstream-cli")
+            ff_source = vgm_source = "系統 PATH"
+    else:
+        ffmpeg, vgm = find_external_bin("ffmpeg"), find_external_bin("vgmstream-cli")
+        ff_source = vgm_source = "系統 PATH"
+
     statuses.append(
         BackendStatus(
             "ffmpeg",
             ffmpeg is not None,
             ffmpeg or "-",
-            "未找到。建議安裝以支援 m4a/aac/wma 等格式（見 docs/PHASE1-INGEST.md）",
+            (
+                f"來源：{ff_source}"
+                if ffmpeg
+                else "未找到。建議安裝以支援 m4a/aac/wma 等格式（見 docs/PHASE1-INGEST.md）"
+            ),
         )
     )
 
-    vgm = find_external_bin("vgmstream-cli")
     statuses.append(
         BackendStatus(
             "vgmstream",
             vgm is not None,
             vgm or "-",
-            "未找到。處理 .wem/.awb/.fsb 遊戲容器時必需",
+            (
+                f"來源：{vgm_source}"
+                if vgm
+                else "未找到。處理 .wem/.awb/.fsb 遊戲容器時必需"
+            ),
         )
     )
 

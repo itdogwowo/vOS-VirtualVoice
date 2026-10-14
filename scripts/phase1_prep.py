@@ -632,9 +632,19 @@ def process_one(src: Path, cfg: PipelineConfig, args: argparse.Namespace) -> Fil
     """
     root = repo_root()
     res = FileResult(src_path=rel(src, root), group=cfg.group_of(src))
-    info = sniff_format(src)
+
+    # 格式判定（含 vgmstream 後備）。
+    #
+    # 為什麼 convert 也要做後備判定：scan 判不出來的檔案，如果 convert 只用
+    # 自己的 magic 表，就會被當成 unknown -> 解碼失敗 -> 直接丟掉。但那些檔案
+    # 其實 vgmstream 解得動。少了這段，scan 的後備判定等於白做 ——
+    # 而且會出現「scan 說沒問題、convert 卻丟掉」這種自相矛盾的結果。
+    vgm_exe = find_external_bin("vgmstream-cli", cfg.unpack_vgmstream_bin)
+    info, fallback_note = sniff_with_fallback(src, vgm_exe)
     res.src_format = info.code
     res.src_format_label = info.label
+    if fallback_note:
+        res.src_format_label = f"{info.label}（{fallback_note}）"
     try:
         res.src_bytes = src.stat().st_size
     except OSError:
@@ -645,7 +655,11 @@ def process_one(src: Path, cfg: PipelineConfig, args: argparse.Namespace) -> Fil
         res.reason = "容器檔，需先解包（執行 unpack）"
         return res
 
-    dec = decode(src, sample_rate=None)
+    # 後備判定為 vgmstream 可解時，明確指定後端，
+    # 避免 soundfile/ffmpeg 先失敗再退而求其次
+    dec = decode(
+        src, preferred=info.decoder if info.code == "vgmstream_generic" else None
+    )
     res.decoder = dec.backend
     if not dec.ok:
         res.status = "error"
@@ -873,7 +887,7 @@ def cmd_convert(cfg: PipelineConfig, args: argparse.Namespace) -> int:
         needed = est_out.needed_bytes + est_rej.needed_bytes
         print()
         print(est_out.render())
-        print(f" 淘汰區另需約 {est_out.human(est_rej.high_bytes) if hasattr(est_out,'human') else est_rej.low_bytes}（來源檔的完整複本）")
+        print(f" 淘汰區另需約 {human_bytes(est_rej.high_bytes)}（來源檔的完整複本）")
         if combined_free < needed and not args.force:
             print(
                 f"\n {BAD} 空間不足（合計需約 {needed / 1024**3:.1f} GiB，"
@@ -1204,6 +1218,7 @@ def cmd_report(cfg: PipelineConfig, args: argparse.Namespace) -> int:
         quality_gate=cfg.quality_gate,
         scan_extensions=cfg.scan_extensions,
         do_scan=not args.no_scan,
+        cfg=cfg,
     )
 
     md = render(
@@ -1405,6 +1420,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"{BAD} 設定檔錯誤：{exc}", file=sys.stderr)
         return 2
+
+    # 把設定檔裡的外部工具路徑匯出成環境變數，讓底層模組（_audioio / unpack）
+    # 拿到同一個值。少了這一步，設定檔指定的 vgmstream 只有 scan/unpack 找得到，
+    # convert 解碼時會說「未找到 vgmstream-cli」—— 也就是同一份設定在
+    # 不同子命令之間行為不一致。
+    config.export_tool_overrides(cfg)
 
     # --no-quality-gate / --max-subsongs 以 CLI 覆寫設定檔（dataclass frozen，用 replace）
     if getattr(args, "no_quality_gate", False):

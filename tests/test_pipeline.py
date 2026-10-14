@@ -467,3 +467,76 @@ class TestReportChecks:
         # 但逐角色表格仍要出現（只有一列 default），讓你知道素材落在哪一組
         md = (root / "data" / "_reports" / "PHASE1_REPORT.md").read_text("utf-8")
         assert "## 3. 逐角色素材量" in md
+
+
+# ===========================================================================
+# 未知格式的後備判定（vgmstream）
+# ===========================================================================
+def _mystery_file(path: Path, size: int = 128) -> Path:
+    """
+    建立一個 magic 完全無法辨識的檔案。
+
+    模擬真實情況：某些遊戲用自製封裝，開頭不是任何已知 magic，
+    但底層其實是 vgmstream 認得動的音訊。這種檔案若只靠自己的 magic 表，
+    會被當成「未知格式」而在 convert 階段直接丟掉。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"MYSTERY0" + b"\x00" * (size - 8))
+    return path
+
+# ===========================================================================
+# 跨子命令一致性：scan 認得的，convert 就必須處理
+# ===========================================================================
+class TestScanConvertConsistency:
+    """
+    守著一個我犯過兩次的整合缺陷：**scan 與 convert 的格式判定不一致**。
+
+    症狀：scan 說「這個檔案 vgmstream 解得動」，convert 卻把它當未知格式
+    丟掉。畫面上兩邊看起來都正常，所以你不會發現 —— 直到發現素材少了。
+
+    根因是 convert 的 process_one 沒有做後備判定（只有 scan 做了）。
+    這條測試直接比對兩個子命令對同一批檔案的結論。
+    """
+
+    def test_convert_processes_what_scan_identified(self, tmp_dir: Path) -> None:
+        fake = make_fake_exe(tmp_dir / "bin")
+        root = _scaffold(tmp_dir / "repo", fake_exe=fake, grouping="none")
+        # magic 認不出來、但 vgmstream 解得動；3 秒長度讓它能進合格區
+        _mystery_file(root / "data" / "00_raw" / "mystery_fake_dur=3.wem", size=128)
+
+        # scan 必須說它可解碼
+        scan = _cli(["scan"], root)
+        assert scan.returncode == 0, scan.stdout
+        assert "vgmstream 可解碼" in scan.stdout, scan.stdout
+
+        # convert 必須真的處理它（而不是當未知格式丟掉）
+        proc = _cli(["convert", "--overwrite", "-v"], root)
+        assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+
+        with (root / "data" / "_reports" / "manifest_phase1.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as fh:
+            rows = list(csv.DictReader(fh))
+        assert len(rows) == 1, rows
+        row = rows[0]
+        assert row["status"] != "error", f"convert 把 scan 認得的檔案解碼失敗了：{row['error']}"
+        assert "vgmstream" in row["src_format_label"], row["src_format_label"]
+        assert row["decoder"] == "vgmstream", row["decoder"]
+        # 3 秒 → 應通過篩選
+        assert row["status"] == "ok", row["reason"]
+
+    def test_convert_records_fallback_note_in_manifest(self, tmp_dir: Path) -> None:
+        """後備判定的說明要進 manifest，方便事後追溯「這個檔案是什麼」。"""
+        fake = make_fake_exe(tmp_dir / "bin")
+        root = _scaffold(tmp_dir / "repo", fake_exe=fake, grouping="none")
+        _mystery_file(root / "data" / "00_raw" / "mystery_fake_dur=3.wem", size=128)
+
+        assert _cli(["convert", "--overwrite"], root).returncode == 0
+        with (root / "data" / "_reports" / "manifest_phase1.csv").open(
+            encoding="utf-8-sig", newline=""
+        ) as fh:
+            rows = list(csv.DictReader(fh))
+        # 標籤應帶上 vgmstream 回報的編碼資訊
+        assert any("fake-pcm16" in r["src_format_label"] for r in rows), [
+            r["src_format_label"] for r in rows
+        ]
