@@ -39,6 +39,10 @@ python scripts/phase1_prep.py selftest
 # 3) 檢查環境（Python 依賴 / ffmpeg / vgmstream / 資料夾）
 python scripts/phase1_prep.py doctor
 
+# 3b) 偵測運算環境並依 VRAM 擬合訓練參數（Phase 3，不需要素材）
+#     會區分「沒有 GPU」與「裝到 CPU-only 的 PyTorch」—— 兩者解法完全不同
+python scripts/phase1_prep.py env
+
 # 4) 把遊戲語音放進 data/00_raw/（可含子資料夾），然後嗅探真實格式
 python scripts/phase1_prep.py scan
 
@@ -111,7 +115,10 @@ vOS-VirtualVoice/
 │       └── PHASE1_REPORT.md/.json # 綜合報告（驗收清單 + 下一步）
 ├── docs/
 │   ├── PHASE1-INGEST.md           # Phase 1 完整操作手冊
-│   └── FORMAT-PLAYBOOK.md         # 遊戲音訊格式決策手冊（Wwise/CriWare/FMOD/Unity/Unreal）
+│   ├── FORMAT-PLAYBOOK.md         # 遊戲音訊格式決策手冊（Wwise/CriWare/FMOD/Unity/Unreal）
+│   └── PHASE3-ENVIRONMENT.md      # Phase 3 環境配置與 VRAM 參數矩陣
+│   ├── hwinfo.py                  # CUDA/MPS/CPU 偵測（不依賴 WMI）
+│   ├── trainfit.py                # VRAM -> 訓練參數擬合
 ├── scripts/
 │   ├── phase1_prep.py             # 主程式（doctor/scan/unpack/convert/audition/tune/report/all）
 │   ├── run_phase1.ps1 / .sh       # 一鍵入口（Windows / macOS+Linux）

@@ -108,6 +108,8 @@ from report import collect, render, render_json  # noqa: E402
 from selftest import run_selftest  # noqa: E402
 from space import estimate_from_source_bytes  # noqa: E402
 from diag import diagnose_all  # noqa: E402
+from hwinfo import detect_torch_environment, render_env_report  # noqa: E402
+from trainfit import fit_training_params, render_params  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Manifest schema（欄位順序固定，方便 Phase 4 用 pandas 讀）
@@ -1338,6 +1340,64 @@ def cmd_selftest(cfg: PipelineConfig, args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 # ---------------------------------------------------------------------------
+# 子命令：env（Phase 3 環境偵測與參數擬合）
+# ---------------------------------------------------------------------------
+def cmd_env(cfg: PipelineConfig, args: argparse.Namespace) -> int:
+    """
+    偵測運算環境（CUDA / MPS / CPU）並依 VRAM 擬合訓練參數。
+
+    這是 Phase 3 的入口。它不需要任何素材，也不需要先跑過 Phase 1 ——
+    只要有 PyTorch 就能執行。用途是在你投入時間整理資料之前，先知道
+    這台機器能不能訓練、以及該用什麼參數。
+    """
+    report = detect_torch_environment()
+    print(render_env_report(report))
+    print()
+    params = fit_training_params(report)
+    print(render_params(params))
+
+    if args.json:
+        payload = {
+            "environment": {
+                "os": report.os_name,
+                "python": report.python_version,
+                "torch": report.torch_version,
+                "torch_cuda_build": report.torch_cuda_build,
+                "cpu_count": report.cpu_count,
+                "gpu_available": report.gpu_available,
+                "warnings": report.warnings,
+                "devices": [
+                    {
+                        "kind": d.kind,
+                        "name": d.name,
+                        "total_vram_gb": d.total_vram_gb,
+                        "free_vram_gb": d.free_vram_gb,
+                    }
+                    for d in report.devices
+                ],
+            },
+            "training_params": {
+                "device": params.device,
+                "batch_size": params.batch_size,
+                "gradient_accumulation_steps": params.grad_accum,
+                "effective_batch_size": params.effective_batch,
+                "precision": params.precision,
+                "gradient_checkpointing": params.grad_checkpointing,
+                "cache_dataset": params.cache_dataset,
+                "num_workers": params.num_workers,
+            },
+        }
+        out = cfg.paths.reports_dir / "phase3_env.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n 機器可讀版本：{rel(out, repo_root())}")
+
+    # 沒有 GPU 時回傳非零，方便腳本化判斷
+    return 0 if report.gpu_available else 3
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -1391,6 +1451,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("tune", "分析 manifest，建議該不該調整篩選門檻（淘汰率異常時用）"),
         ("report", "產生 Phase 1 綜合報告（驗收清單 + 下一步指令，交接用）"),
         ("selftest", "用合成素材驗證工具鏈本身能不能動（不需要你的素材）"),
+        ("env", "偵測 CUDA/MPS/CPU 並依 VRAM 擬合訓練參數（Phase 3，不需素材）"),
         ("all", "依序執行 scan → unpack → convert"),
     ):
         sp = sub.add_parser(name, help=help_text)
@@ -1415,6 +1476,12 @@ def build_parser() -> argparse.ArgumentParser:
                 "--keep-workspace",
                 action="store_true",
                 help="保留臨時工作區供事後檢查（預設跑完刪除）",
+            )
+        if name == "env":
+            sp.add_argument(
+                "--json",
+                action="store_true",
+                help="同時輸出機器可讀的 JSON（data/_reports/phase3_env.json）",
             )
 
     return parser
@@ -1455,6 +1522,7 @@ def main(argv: list[str] | None = None) -> int:
         "tune": cmd_tune,
         "report": cmd_report,
         "selftest": cmd_selftest,
+        "env": cmd_env,
         "all": lambda c, a: _cmd_all(c, a, parser),
     }
     try:
